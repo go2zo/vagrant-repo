@@ -200,6 +200,9 @@ Vagrant.configure("2") do |config|
 
       # Enable provisioning with a Docker.
       if Vagrant.has_plugin?("vagrant-docker-compose") then
+        # config.vm.provision :docker do |d|
+        #   d.run "nginx"
+        # end
         config.vm.provision :docker
         config.vm.provision :docker_compose,
           compose_version: "1.23.2",
@@ -208,7 +211,6 @@ Vagrant.configure("2") do |config|
           rebuild: true,
           run: "always",
           command_options: { logs: "--tail='all'" }
-          # env: { "COMPOSE_HTTP_TIMEOUT" => 200 }
       end
     end
   end

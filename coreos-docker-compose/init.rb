@@ -5,7 +5,7 @@ require 'uri'
 require 'logger'
 require 'open3'
 
-logger = Logger.new(STDOUT)
+$logger = Logger.new(STDOUT)
 
 # set num_instances
 $num_instances = 1
@@ -22,7 +22,17 @@ if File.exist?(CONFIG)
   require CONFIG
 end
 
-logger.info("instances size: #{$num_instances}")
+$logger.info("instances size: #{$num_instances}")
+
+def execute_cmd(cmd)
+  $logger.info("Executed shell script: #{cmd}")
+
+  Open3.popen2e(cmd) do |stdin, stdout_and_stderr, thread|
+    until stdout_and_stderr.eof?
+      $logger.info(stdout_and_stderr.gets.strip)
+    end
+  end
+end
 
 # 1. generate etcd token
 # token generation API
@@ -36,58 +46,57 @@ uri.query = URI.encode_www_form(new_query_ar)
 #uri.query = [uri.query, URI.encode_www_form('size' => 1)].compact.join('&')
 
 # 1-2. rest API를 호출해 response 받음
-logger.info("Request URI: #{uri}")
+$logger.info("Request URI: #{uri}")
 response = Net::HTTP.get_response(uri)
-logger.info("Response Body: #{response.body}")
+$logger.info("Response Body: #{response.body}")
 
 # 2. 'cl.conf' 파일이 있는 경우 cl.conf --> config.ign transform
 if File.exist?(CL_CONFIG)
   # 2-1. etcd token을 새로 생성한 토큰으로 replace
-  File.open(CL_CONFIG, 'r+') do |conf_file|
-    isEtcd = false
+  File.open(CL_CONFIG, mode: 'r+', crlf_newline: false) do |conf_file|
     newLines = Array.new
 
     # one line 씩 읽으며 키로 검색하여 해당하는 value를 replace
-    File.readlines(conf_file).each do |line|
-      isEtcd = line.strip.start_with?("etcd:")
+    ws_size = -1
+    is_etcd = false
+    is_etcd_discovery = false
 
-      if isEtcd && line.strip.start_with?("discovery:")
-        line = line.gsub(/(\").*(\"$)/, "\\1#{response.body}\\2")
+    File.readlines(conf_file).each do |line|
+      match = line.match(/^(\s*)(\w+):/)
+      unless match.nil?
+        if ws_size < 0 || match[1].length <= ws_size
+          ws_size = match[1].length
+          is_etcd = match[2].eql?("etcd")
+        end
+        is_etcd_discovery = is_etcd && match[2].eql?("discovery")
       end
 
-      #newLines.push(line)
+      line = line.gsub(/(\").*(\"$)/, "\\1#{response.body}\\2") if is_etcd_discovery
       newLines << line
     end
     
     conf_file.rewind
     # puts는 write와 다르게 new line을 자동 입력
     conf_file.puts(newLines)
-    logger.info("'cl.conf' is successfully updated.")
+    $logger.info("'cl.conf' is successfully updated.")
   end
 
   # 시스템에 Config Transpiler(ct)가 있는지 확인
   ct_cmd = 'ct'
   platform = 'vagrant-virtualbox'
   pretty_print = false
-  stdout, stderr, status = Open3.capture3("which #{ct_cmd}")
+  stdout_and_stderr_str, status = Open3.capture2e("which #{ct_cmd}")
   
   # 2-2. Config Transpiler(ct) utility를 통해 config.ign 파일 생성
   if status.success?
     # ERROR: ct full path를 사용하는 경우 '지정된 경로를 찾을 수 없습니다.'
     #cmd = "#{CT_PATH.strip} --platform=#{platform} #{pretty_print ? '--pretty ' : ''}< #{CL_CONFIG} > #{CONFIG_IGN}"
-    cmd = "#{ct_cmd} --platform=#{platform} #{'--pretty ' if pretty_print}< #{CL_CONFIG} > #{CONFIG_IGN}"
-    logger.info("Executed shell script: #{cmd}")
-
-    Open3.popen3(cmd) do |stdin, stdout, stderr, thread|
-      until stderr.eof? do
-        logger.error(stderr.gets)
-      end
-    end
+    cmd = "#{ct_cmd} --platform=#{platform} #{pretty_print && '--pretty ' || ''}< #{CL_CONFIG} > #{CONFIG_IGN}"
+    execute_cmd(cmd)
   end
 end
 
 # 3. vagrant 실행
-Open3.popen3("vagrant up --provision") do |stdin, stdout, stderr, thread|
-  io = thread.value.success
+# execute_cmd("vagrant up --provision")
 
-end
+$logger.close
